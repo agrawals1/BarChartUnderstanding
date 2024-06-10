@@ -2,18 +2,30 @@ import cv2
 import numpy as np
 import pytesseract
 from mmdet.apis import init_detector, inference_detector
-import mmcv
-import itertools
-import scipy
-from scipy.interpolate import CubicSpline, interp1d
-from ChartDete.infer_line import do_instance, get_xrange, get_kp, interpolate
+import os
 
-# Define relative paths
-CKPT = "ChartDete/iter_3000.pth"
-CONFIG = "ChartDete/lineformer_swin_t_config.py"
-IMG_PATH = "ChartDete/pic_large.png"
+current_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(current_dir)
+
+from infer_line import do_instance, get_xrange, get_kp, interpolate
+
+# Define relative paths for line detection
+CKPT = os.path.join(current_dir, "iter_3000.pth")
+CONFIG = os.path.join(current_dir, "lineformer_swin_t_config.py")
+IMG_PATH = os.path.join(current_dir, "pic_large.png")
 DEVICE = "cpu"
-model_lin = init_detector(CONFIG, CKPT, device=DEVICE)
+device = "cuda:0"
+
+PLOT_AREA = 2
+XLABEL = 4
+YLABEL = 5
+VALUE_LABEL = 14
+THRESH = 0.4
+# Specify the path to model config and checkpoint file for chart components detection 
+config_file = os.path.join(current_dir, 'configs/cascade_rcnn_swin-t_fpn_LGF_VCE_PCE_coco_focalsmoothloss.py')
+checkpoint_file = os.path.join(current_dir, 'model/checkpoint.pth')
+
+
 
 def get_dataseries(img, annot=None, to_clean=False, post_proc=False, mask_kp_sample_interval=10, return_masks=False):
     """
@@ -98,7 +110,7 @@ def extract_text_from_bboxes(image, bboxes):
         texts.append(text.strip())
     return texts
 
-def get_axis_values(result, img, class_idx, label, sort_param):
+def get_axis_values(result, img, class_idx, label, sort_param, chart_name):
     """
     Get axis values from bounding boxes.
     """
@@ -108,26 +120,27 @@ def get_axis_values(result, img, class_idx, label, sort_param):
     texts = extract_text_from_bboxes(img, bboxes)
     if sort_param:
         texts = texts[::-1]
-    print(f"{label} axis values: {texts}")
+    print("---------------------------------------------------------------------------------------------------")
+    print(f"{label} axis values for the {chart_name} chart: {texts}")
+    print("---------------------------------------------------------------------------------------------------")
     return texts
 
-# Specify the path to model config and checkpoint file
-config_file = 'ChartDete/model/cascade_rcnn_swin-t_fpn_LGF_VCE_PCE_coco_focalsmoothloss.py'
-checkpoint_file = 'ChartDete/model/checkpoint.pth'
+
 
 # Build the model from a config file and a checkpoint file
-model = init_detector(config_file, checkpoint_file, device='cuda:0')
+model_lin = init_detector(CONFIG, CKPT, device=DEVICE)
+model = init_detector(config_file, checkpoint_file, device=device)
 
-# Test a single image and show the results
+# Detect bounding boxes for 17 different classes on the entire image
 result = inference_detector(model, IMG_PATH)
-result_filtered = filter_bounding_boxes(result, 0.4)
+result_filtered = filter_bounding_boxes(result, THRESH)
 
-ylabel_bbs = result_filtered[5]
+ylabel_bbs = result_filtered[YLABEL]
 ylabel_bbs_argmin = np.argsort(ylabel_bbs[:, 0])[0]
 px = ylabel_bbs[ylabel_bbs_argmin][0]
 px = px - px / 50
 
-plot_area_bbs = result_filtered[2]
+plot_area_bbs = result_filtered[PLOT_AREA]
 plot_area_bbs_argmax = np.argsort(plot_area_bbs[:, 1])[-1]
 py = plot_area_bbs[plot_area_bbs_argmax][1]
 py = py - py / 50
@@ -146,29 +159,29 @@ upper_right = img[0:py, px:width]
 lower_right = img[py:height, px:width]
 
 # Save the upper right part
-cv2.imwrite('ChartDete/upper_right.png', upper_right)
+cv2.imwrite(os.path.join(current_dir, 'upper_right.png'), upper_right)
 
 # Save the lower right part
-cv2.imwrite('ChartDete/lower_right.png', lower_right)
+cv2.imwrite(os.path.join(current_dir, 'lower_right.png'), lower_right)
 
 print("Upper right and lower right parts have been saved.")
 
-result_UR = inference_detector(model, 'ChartDete/upper_right.png')
-result_LR = inference_detector(model, 'ChartDete/lower_right.png')
-result_UR = filter_bounding_boxes(result_UR, 0.4)
-result_LR = filter_bounding_boxes(result_LR, 0.4)
+result_UR = inference_detector(model, os.path.join(current_dir, 'upper_right.png'))
+result_LR = inference_detector(model, os.path.join(current_dir, 'lower_right.png'))
+result_UR = filter_bounding_boxes(result_UR, THRESH)
+result_LR = filter_bounding_boxes(result_LR, THRESH)
 
 # Filter out bounding boxes in lower_right part that lie to the right of the plot area
-plot_area_bbs_LR = result_LR[2]
+plot_area_bbs_LR = result_LR[PLOT_AREA]
 plot_area_x_max = np.max(plot_area_bbs_LR[:, 2])
 filtered_result_LR = [bboxes[bboxes[:, 0] <= plot_area_x_max] for bboxes in result_LR]
 
 # Extract x-axis and y-axis values from upper_right and lower_right
-x_axis_values_UR = get_axis_values(result_UR, upper_right, 4, 'x', 0)
-y_axis_values_UR = get_axis_values(result_UR, upper_right, 5, 'y', 1)
+x_axis_values_UR = get_axis_values(result_UR, upper_right, XLABEL, 'x', 0, "UpperRight")
+y_axis_values_UR = get_axis_values(result_UR, upper_right, YLABEL, 'y', 1, "UpperRight")
 
-x_axis_values_LR = get_axis_values(filtered_result_LR, lower_right, 4, 'x', 0)
-y_axis_values_LR = get_axis_values(filtered_result_LR, lower_right, 5, 'y', 1)
+x_axis_values_LR = get_axis_values(filtered_result_LR, lower_right, 4, 'x', 0, "LowerRight")
+y_axis_values_LR = get_axis_values(filtered_result_LR, lower_right, 5, 'y', 1, "LowerRight")
 
 # Extract pairs of (x-axis, y-axis) values corresponding to the bars
 def get_bar_values(result, img, y_class_idx, x_texts):
@@ -178,15 +191,23 @@ def get_bar_values(result, img, y_class_idx, x_texts):
     y_texts = extract_text_from_bboxes(img, y_bboxes)
     return list(zip(x_texts, y_texts))
 
-bar_values_UR = get_bar_values(result_UR, upper_right, 14, x_axis_values_UR)
-bar_values_LR = get_bar_values(filtered_result_LR, lower_right, 14, x_axis_values_LR)
+bar_values_UR = get_bar_values(result_UR, upper_right, VALUE_LABEL, x_axis_values_UR)
+bar_values_LR = get_bar_values(filtered_result_LR, lower_right, VALUE_LABEL, x_axis_values_LR)
 
+print("---------------------------------------------------------------------------------------------------")
 print(f"Upper right bar values: {bar_values_UR}")
+print("---------------------------------------------------------------------------------------------------")
 print(f"Lower right bar values: {bar_values_LR}")
+print("---------------------------------------------------------------------------------------------------")
 
 # Save the visualization results
-model.show_result(upper_right, result_UR, out_file='ChartDete/sample_result_UR_final.jpg')
-model.show_result(lower_right, result_LR, out_file='ChartDete/sample_result_LR_final.jpg')
+model.show_result(upper_right, result_UR, out_file=os.path.join(current_dir, 'sample_result_UR_final.jpg'))
+model.show_result(lower_right, result_LR, out_file=os.path.join(current_dir, 'sample_result_LR_final.jpg'))
 
 line_vals = get_line_vals(lower_right)
+
+print("---------------------------------------------------------------------------------------------------")
+print("Line Chart (x,y) pairs for the Lower Right Chart")
+print("---------------------------------------------------------------------------------------------------")
 print(line_vals)
+print("---------------------------------------------------------------------------------------------------")
